@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Henya Henya Fighters</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Noto+Sans+JP:wght@700&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #87CEEB, #E0F6FF);
+            font-family: 'Fredoka One', 'Noto Sans JP', sans-serif;
+            touch-action: none;
+            user-select: none;
+        }
+
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* UIレイヤー */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; /* UIの裏のキャンバスを触れるようにする */
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .status-panel {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(5px);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 2px solid white;
+            pointer-events: auto; /* ここだけ触れるように */
+            width: 100%;
+            max-width: 300px;
+        }
+
+        .hp-bar-bg {
+            background: #e2e8f0;
+            height: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 5px;
+        }
+
+        .hp-bar-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.1s ease-out;
+        }
+
+        /* 画面揺れ */
+        .shake { animation: shake 0.3s cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-2px, 2px, 0); }
+            20%, 80% { transform: translate3d(4px, -2px, 0); }
+            30%, 50%, 70% { transform: translate3d(-6px, 4px, 0); }
+            40%, 60% { transform: translate3d(6px, -4px, 0); }
+        }
+
+        /* 画面フラッシュ */
+        #flash-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: red; opacity: 0; pointer-events: none; z-index: 50;
+            transition: opacity 0.1s;
+        }
+
+        /* ダメージテキスト */
+        .damage-text {
+            position: absolute;
+            font-size: 2rem;
+            font-weight: 900;
+            color: #ef4444;
+            text-shadow: 2px 2px 0 #fff, -2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff;
+            pointer-events: none;
+            z-index: 20;
+            animation: popUp 0.8s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+        }
+        @keyframes popUp {
+            0% { transform: translate(-50%, 0) scale(0.5); opacity: 1; }
+            50% { transform: translate(-50%, -50px) scale(1.2); opacity: 1; }
+            100% { transform: translate(-50%, -80px) scale(1); opacity: 0; }
+        }
+
+        /* ポップアップ画面 */
+        .overlay-screen {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(5px);
+            z-index: 100;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container"></div>
+    <div id="flash-overlay"></div>
+
+    <div id="ui-layer">
+        <div class="flex justify-between w-full max-w-4xl mx-auto gap-4">
+            <!-- プレイヤー -->
+            <div class="status-panel">
+                <div class="flex justify-between items-end">
+                    <span class="text-xl text-blue-500 font-bold">あなた (Blue)</span>
+                    <span class="text-sm text-gray-500"><span id="player-hp-val">1000</span></span>
+                </div>
+                <div class="hp-bar-bg">
+                    <div id="player-hp-bar" class="hp-bar-fill bg-blue-500 w-full"></div>
+                </div>
+            </div>
+            
+            <!-- 敵 -->
+            <div class="status-panel">
+                <div class="flex justify-between items-end">
+                    <span class="text-xl text-red-500 font-bold">敵 (Red)</span>
+                    <span class="text-sm text-gray-500"><span id="enemy-hp-val">1000</span></span>
+                </div>
+                <div class="hp-bar-bg">
+                    <div id="enemy-hp-bar" class="hp-bar-fill bg-red-500 w-full"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center pb-4 text-gray-700 font-bold drop-shadow-md text-lg">
+            操作: キャラクター（青）をマウス/指で掴んで振り回し、敵にぶつけろ！
+        </div>
+
+        <!-- リスタートボタン -->
+        <button onclick="location.reload()" class="absolute bottom-6 right-6 md:bottom-10 md:right-10 bg-white/80 backdrop-blur border-2 border-white text-gray-700 p-4 rounded-full shadow-lg hover:bg-white pointer-events-auto transition-transform active:scale-90 flex items-center justify-center z-50" title="やり直す">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- スタート画面 -->
+    <div id="start-screen" class="overlay-screen">
+        <h1 class="text-5xl md:text-6xl text-white font-bold mb-4 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] text-center">
+            へにゃへにゃ<br>FIGHTERS
+        </h1>
+        <p class="text-white mb-8 text-lg font-bold">キャラを掴んで振り回せ！</p>
+        <button id="start-btn" class="px-8 py-4 bg-yellow-400 hover:bg-yellow-300 text-yellow-900 font-bold rounded-full text-2xl shadow-[0_4px_0_#b45309] active:shadow-none active:translate-y-1 transition-all">
+            バトル開始
+        </button>
+    </div>
+
+    <!-- リザルト画面 -->
+    <div id="result-screen" class="overlay-screen hidden">
+        <h1 id="result-title" class="text-5xl md:text-7xl text-white font-bold mb-8 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] text-center">
+            YOU WIN!
+        </h1>
+        <button onclick="location.reload()" class="px-8 py-4 bg-white text-gray-800 font-bold rounded-full text-xl shadow-lg active:scale-95 transition-transform">
+            もう一度遊ぶ
+        </button>
+    </div>
+
+    <script>
+        // --- ゲームステータス ---
+        const GAME = {
+            playerHp: 1000,
+            enemyHp: 1000,
+            maxHp: 1000,
+            isPlaying: false
+        };
+
+        const els = {
+            playerHpBar: document.getElementById('player-hp-bar'),
+            playerHpVal: document.getElementById('player-hp-val'),
+            enemyHpBar: document.getElementById('enemy-hp-bar'),
+            enemyHpVal: document.getElementById('enemy-hp-val'),
+            flash: document.getElementById('flash-overlay'),
+            startScreen: document.getElementById('start-screen'),
+            resultScreen: document.getElementById('result-screen'),
+            resultTitle: document.getElementById('result-title'),
+        };
+
+        // --- Matter.js セットアップ ---
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              Runner = Matter.Runner,
+              Composites = Matter.Composites,
+              Composite = Matter.Composite,
+              Constraint = Matter.Constraint,
+              MouseConstraint = Matter.MouseConstraint,
+              Mouse = Matter.Mouse,
+              World = Matter.World,
+              Events = Matter.Events,
+              Vector = Matter.Vector,
+              Bodies = Matter.Bodies;
+
+        const engine = Engine.create();
+        const world = engine.world;
+
+        // キャンバスのサイズ設定
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        const render = Render.create({
+            element: document.getElementById('game-container'),
+            engine: engine,
+            options: {
+                width: width,
+                height: height,
+                background: 'transparent',
+                wireframes: false,
+                showAngleIndicator: false
+            }
+        });
+
+        Render.run(render);
+        const runner = Runner.create();
+
+        // --- ステージ作成（壁と床） ---
+        const wallOptions = { isStatic: true, render: { fillStyle: '#475569' }, friction: 0.1, restitution: 0.5 };
+        const ground = Bodies.rectangle(width / 2, height + 30, width + 100, 100, wallOptions);
+        const ceiling = Bodies.rectangle(width / 2, -50, width + 100, 100, wallOptions);
+        const leftWall = Bodies.rectangle(-50, height / 2, 100, height + 100, wallOptions);
+        const rightWall = Bodies.rectangle(width + 50, height / 2, 100, height + 100, wallOptions);
+        
+        // ステージ内にちょっとした足場を追加
+        const platform1 = Bodies.rectangle(width * 0.2, height * 0.6, 200, 20, wallOptions);
+        const platform2 = Bodies.rectangle(width * 0.8, height * 0.6, 200, 20, wallOptions);
+
+        World.add(world, [ground, ceiling, leftWall, rightWall, platform1, platform2]);
+
+        // --- ラグドール生成関数 (へにゃへにゃキャラ) ---
+        function createRagdoll(x, y, scale, options) {
+            const headOptions = { ...options, friction: 0.5, restitution: 0.2, density: 0.05, label: 'head' };
+            const bodyOptions = { ...options, friction: 0.5, restitution: 0.2, density: 0.05, label: 'body' };
+            const limbOptions = { ...options, friction: 0.5, restitution: 0.2, density: 0.02, label: 'limb' };
+
+            const head = Bodies.circle(x, y - 60 * scale, 20 * scale, headOptions);
+            const chest = Bodies.rectangle(x, y - 15 * scale, 40 * scale, 40 * scale, bodyOptions);
+            const pelvis = Bodies.rectangle(x, y + 25 * scale, 40 * scale, 20 * scale, bodyOptions);
+
+            const leftUpperArm = Bodies.rectangle(x - 30 * scale, y - 15 * scale, 15 * scale, 35 * scale, limbOptions);
+            const rightUpperArm = Bodies.rectangle(x + 30 * scale, y - 15 * scale, 15 * scale, 35 * scale, limbOptions);
+            
+            const leftLeg = Bodies.rectangle(x - 15 * scale, y + 60 * scale, 15 * scale, 45 * scale, limbOptions);
+            const rightLeg = Bodies.rectangle(x + 15 * scale, y + 60 * scale, 15 * scale, 45 * scale, limbOptions);
+
+            // 関節の固さ（低いほどへにゃへにゃ）
+            const stiffness = 0.3;
+            const damping = 0.1;
+
+            const jointOptions = { stiffness: stiffness, damping: damping, render: { visible: false } };
+
+            const neck = Constraint.create({ bodyA: head, bodyB: chest, pointA: { x: 0, y: 20 * scale }, pointB: { x: 0, y: -20 * scale }, ...jointOptions });
+            const spine = Constraint.create({ bodyA: chest, bodyB: pelvis, pointA: { x: 0, y: 20 * scale }, pointB: { x: 0, y: -10 * scale }, ...jointOptions });
+            
+            const leftShoulder = Constraint.create({ bodyA: chest, bodyB: leftUpperArm, pointA: { x: -25 * scale, y: -10 * scale }, pointB: { x: 0, y: -15 * scale }, ...jointOptions });
+            const rightShoulder = Constraint.create({ bodyA: chest, bodyB: rightUpperArm, pointA: { x: 25 * scale, y: -10 * scale }, pointB: { x: 0, y: -15 * scale }, ...jointOptions });
+
+            const leftHip = Constraint.create({ bodyA: pelvis, bodyB: leftLeg, pointA: { x: -10 * scale, y: 10 * scale }, pointB: { x: 0, y: -20 * scale }, ...jointOptions });
+            const rightHip = Constraint.create({ bodyA: pelvis, bodyB: rightLeg, pointA: { x: 10 * scale, y: 10 * scale }, pointB: { x: 0, y: -20 * scale }, ...jointOptions });
+
+            const ragdoll = Composite.create({
+                bodies: [head, chest, pelvis, leftUpperArm, rightUpperArm, leftLeg, rightLeg],
+                constraints: [neck, spine, leftShoulder, rightShoulder, leftHip, rightHip]
+            });
+
+            // 全パーツに所属情報を付与（ダメージ判定用）
+            ragdoll.bodies.forEach(b => b.owner = options.ownerName);
+            return ragdoll;
+        }
+
+        // キャラクター生成 (collisionFilterを分けて、キャラ同士はぶつかるが、掴むためのマウス操作用などを設定)
+        const playerColor = '#3b82f6';
+        const enemyColor = '#ef4444';
+        
+        // collision group
+        const groupPlayer = Matter.Body.nextGroup(true);
+        const groupEnemy = Matter.Body.nextGroup(true);
+
+        let player = createRagdoll(width * 0.3, height * 0.4, 1.2, { render: { fillStyle: playerColor }, collisionFilter: { group: groupPlayer }, ownerName: 'player' });
+        let enemy = createRagdoll(width * 0.7, height * 0.4, 1.2, { render: { fillStyle: enemyColor }, collisionFilter: { group: groupEnemy }, ownerName: 'enemy' });
+
+        World.add(world, [player, enemy]);
+
+        // --- マウス操作（掴んで投げる） ---
+        const mouse = Mouse.create(render.canvas);
+        const mouseConstraint = MouseConstraint.create(engine, {
+            mouse: mouse,
+            constraint: {
+                stiffness: 0.1, // マウスで引っ張る力の柔らかさ
+                render: { visible: false }
+            },
+            // プレイヤーのパーツだけ掴めるようにフィルタリング
+            collisionFilter: { mask: groupPlayer } 
+        });
+        
+        // プレイヤーのパーツのみを掴み対象にするカスタムロジック
+        Events.on(mouseConstraint, 'mousedown', function(event) {
+            if(mouseConstraint.body) {
+                if(mouseConstraint.body.owner !== 'player') {
+                    mouseConstraint.body = null; // 敵は掴めない
+                }
+            }
+        });
+
+        World.add(world, mouseConstraint);
+        render.mouse = mouse; // スクロールバグ防止
+
+        // --- ダメージ・戦闘ロジック ---
+        function updateUI() {
+            els.playerHpVal.textContent = Math.floor(GAME.playerHp);
+            els.enemyHpVal.textContent = Math.floor(GAME.enemyHp);
+            
+            const pPct = Math.max(0, (GAME.playerHp / GAME.maxHp) * 100);
+            const ePct = Math.max(0, (GAME.enemyHp / GAME.maxHp) * 100);
+            
+            els.playerHpBar.style.width = pPct + '%';
+            els.enemyHpBar.style.width = ePct + '%';
+
+            if(pPct < 30) els.playerHpBar.classList.replace('bg-blue-500', 'bg-red-500');
+            if(ePct < 30) els.enemyHpBar.classList.replace('bg-red-500', 'bg-yellow-500');
+        }
+
+        function showDamage(x, y, amount) {
+            const el = document.createElement('div');
+            el.className = 'damage-text';
+            el.textContent = Math.floor(amount);
+            el.style.left = x + 'px';
+            el.style.top = y + 'px';
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 800);
+        }
+
+        async function screenFlash() {
+            els.flash.style.opacity = 0.3;
+            setTimeout(() => els.flash.style.opacity = 0, 100);
+            document.body.classList.add('shake');
+            setTimeout(() => document.body.classList.remove('shake'), 300);
+        }
+
+        function breakRagdoll(ragdollComposite) {
+            // HPが0になったら関節を外してバラバラにする
+            ragdollComposite.constraints.forEach(c => {
+                World.remove(world, c);
+            });
+        }
+
+        function checkGameEnd() {
+            if (!GAME.isPlaying) return;
+
+            if (GAME.enemyHp <= 0) {
+                GAME.isPlaying = false;
+                breakRagdoll(enemy);
+                setTimeout(() => {
+                    els.resultTitle.textContent = "YOU WIN!";
+                    els.resultTitle.className = "text-5xl md:text-7xl font-bold mb-8 drop-shadow-lg text-yellow-400";
+                    els.resultScreen.classList.remove('hidden');
+                }, 1500);
+            } else if (GAME.playerHp <= 0) {
+                GAME.isPlaying = false;
+                breakRagdoll(player);
+                setTimeout(() => {
+                    els.resultTitle.textContent = "YOU LOSE...";
+                    els.resultTitle.className = "text-5xl md:text-7xl font-bold mb-8 drop-shadow-lg text-red-500";
+                    els.resultScreen.classList.remove('hidden');
+                }, 1500);
+            }
+        }
+
+        // 衝突イベントによるダメージ判定
+        Events.on(engine, 'collisionStart', function(event) {
+            if(!GAME.isPlaying) return;
+
+            const pairs = event.pairs;
+            for (let i = 0; i < pairs.length; i++) {
+                const pair = pairs[i];
+                const bodyA = pair.bodyA;
+                const bodyB = pair.bodyB;
+
+                // プレイヤーと敵がぶつかった場合
+                if (bodyA.owner && bodyB.owner && bodyA.owner !== bodyB.owner) {
+                    
+                    // 衝突時の相対速度（勢い）を計算
+                    const relativeVelocity = Vector.sub(bodyA.velocity, bodyB.velocity);
+                    const impact = Vector.magnitude(relativeVelocity);
+
+                    // 勢いが一定以上ならダメージ判定
+                    if (impact > 8) {
+                        const pBody = bodyA.owner === 'player' ? bodyA : bodyB;
+                        const eBody = bodyA.owner === 'enemy' ? bodyA : bodyB;
+
+                        const pSpeed = Vector.magnitude(pBody.velocity);
+                        const eSpeed = Vector.magnitude(eBody.velocity);
+
+                        let hit = false;
+
+                        // プレイヤーの攻撃判定（マウス操作は速度が出やすいため、基準を高く設定）
+                        if (pSpeed > 6) {
+                            const damageE = pSpeed * 2.5;
+                            GAME.enemyHp = Math.max(0, GAME.enemyHp - damageE);
+                            showDamage(eBody.position.x, eBody.position.y - 20, damageE);
+                            hit = true;
+                        }
+
+                        // 敵の攻撃判定（AIは自力で動くため速度が出にくい。基準を甘く、威力を高めに補正）
+                        if (eSpeed > 3) {
+                            const damageP = eSpeed * 4; 
+                            GAME.playerHp = Math.max(0, GAME.playerHp - damageP);
+                            showDamage(pBody.position.x, pBody.position.y - 20, damageP);
+                            screenFlash();
+                            hit = true;
+                        }
+
+                        if (hit) {
+                            updateUI();
+                            checkGameEnd();
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- 敵のAI（より好戦的に、毎フレームプレイヤーを狙って動き回る） ---
+        Events.on(engine, 'beforeUpdate', function() {
+            if (!GAME.isPlaying) return;
+
+            // 敵とプレイヤーのパーツを取得 (createRagdollの生成順を利用)
+            const enemyChest = enemy.bodies[1]; 
+            const playerChest = player.bodies[1];
+            
+            // 敵の腕を取得
+            const enemyLeftArm = enemy.bodies[3];
+            const enemyRightArm = enemy.bodies[4];
+
+            // 敵がまだ壊れていないか確認
+            if (enemyChest && playerChest && enemyChest.owner === 'enemy') {
+                const dir = Vector.sub(playerChest.position, enemyChest.position);
+                const distance = Vector.magnitude(dir);
+                const norm = Vector.normalise(dir);
+
+                // 1. プレイヤーの方へジリジリと近寄る（水平方向の推進力）
+                if (distance > 80 && distance < 800) {
+                    Matter.Body.applyForce(enemyChest, enemyChest.position, { x: norm.x * 0.003, y: 0 });
+                }
+
+                // 2. 腕をバタバタ振り回して攻撃する（トルクを加える）
+                if (Math.random() < 0.15) {
+                    Matter.Body.setAngularVelocity(enemyLeftArm, (Math.random() - 0.5) * 1.0);
+                    Matter.Body.setAngularVelocity(enemyRightArm, (Math.random() - 0.5) * 1.0);
+                }
+
+                // 3. たまに大きく飛びかかってくる（ダイビング攻撃）
+                if (Math.random() < 0.015) { 
+                    Matter.Body.applyForce(enemyChest, enemyChest.position, { 
+                        x: norm.x * 0.15, 
+                        y: -0.25 
+                    });
+                }
+            }
+        });
+
+        // --- ウィンドウリサイズ対応 ---
+        window.addEventListener('resize', () => {
+            render.canvas.width = window.innerWidth;
+            render.canvas.height = window.innerHeight;
+            Matter.Body.setPosition(ground, { x: window.innerWidth / 2, y: window.innerHeight + 30 });
+            Matter.Body.setPosition(rightWall, { x: window.innerWidth + 50, y: window.innerHeight / 2 });
+            Matter.Body.setPosition(platform2, { x: window.innerWidth * 0.8, y: window.innerHeight * 0.6 });
+        });
+
+        // --- ゲーム開始 ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            els.startScreen.classList.add('hidden');
+            GAME.isPlaying = true;
+            Runner.run(runner, engine);
+            updateUI();
+        });
+
+    </script>
+</body>
+</html>

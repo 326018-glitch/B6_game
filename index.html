@@ -478,11 +478,35 @@
 
         // --- ウィンドウリサイズ対応 ---
         window.addEventListener('resize', () => {
-            render.canvas.width = window.innerWidth;
-            render.canvas.height = window.innerHeight;
-            Matter.Body.setPosition(ground, { x: window.innerWidth / 2, y: window.innerHeight + 30 });
-            Matter.Body.setPosition(rightWall, { x: window.innerWidth + 50, y: window.innerHeight / 2 });
-            Matter.Body.setPosition(platform2, { x: window.innerWidth * 0.8, y: window.innerHeight * 0.6 });
+            const newWidth = window.innerWidth;
+            const newHeight = window.innerHeight;
+            render.canvas.width = render.options.width = newWidth;
+            render.canvas.height = render.options.height = newHeight;
+            render.bounds.max.x = newWidth;
+            render.bounds.max.y = newHeight;
+
+            const resizeWall = (body, x, y, wallWidth, wallHeight) => {
+                Matter.Body.scale(body, wallWidth / (body.bounds.max.x - body.bounds.min.x), wallHeight / (body.bounds.max.y - body.bounds.min.y));
+                Matter.Body.setPosition(body, { x, y });
+            };
+            resizeWall(ground, newWidth / 2, newHeight + 30, newWidth + 100, 100);
+            resizeWall(ceiling, newWidth / 2, -50, newWidth + 100, 100);
+            resizeWall(leftWall, -50, newHeight / 2, 100, newHeight + 100);
+            resizeWall(rightWall, newWidth + 50, newHeight / 2, 100, newHeight + 100);
+            Matter.Body.setPosition(platform1, { x: newWidth * 0.2, y: newHeight * 0.6 });
+            Matter.Body.setPosition(platform2, { x: newWidth * 0.8, y: newHeight * 0.6 });
+
+            // Keep both characters inside the walls when the window becomes smaller.
+            [player, enemy].forEach(ragdoll => {
+                const bodies = Composite.allBodies(ragdoll);
+                const minX = Math.min(...bodies.map(body => body.bounds.min.x));
+                const maxX = Math.max(...bodies.map(body => body.bounds.max.x));
+                const minY = Math.min(...bodies.map(body => body.bounds.min.y));
+                const maxY = Math.max(...bodies.map(body => body.bounds.max.y));
+                const x = minX < 0 ? -minX : Math.min(0, newWidth - maxX);
+                const y = minY < 0 ? -minY : Math.min(0, newHeight - 20 - maxY);
+                Composite.translate(ragdoll, { x, y });
+            });
         });
 
         // --- ゲーム開始 ---
